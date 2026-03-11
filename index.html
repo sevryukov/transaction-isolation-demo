@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Симулятор транзакций и блокировок</title>
+    <style>
+        :root {
+            --client-a: #2b6cb0;
+            --client-b: #6b46c1;
+            --server: #2d3748;
+            --bg: #e2e8f0;
+            --danger: #e53e3e;
+            --success: #38a169;
+            --wait: #d69e2e;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: var(--bg);
+            margin: 0; padding: 0;
+            display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+        }
+        
+        /* Компактная шапка */
+        header { 
+            background-color: var(--server); color: white;
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 8px 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); z-index: 10;
+        }
+        header h1 { margin: 0; font-size: 1.2rem; text-transform: uppercase; letter-spacing: 1px; }
+        header p { margin: 0; font-size: 0.9rem; color: #cbd5e0; }
+
+        .page-wrapper {
+            display: flex; flex: 1; padding: 15px; gap: 15px; height: calc(100vh - 60px); box-sizing: border-box;
+        }
+
+        .workspace {
+            flex: 1; display: flex; flex-direction: column; gap: 15px; min-width: 0;
+        }
+
+        .panels-container { display: flex; justify-content: space-between; gap: 15px; flex: 1; }
+        
+        .panel {
+            background: white; padding: 15px; border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1); flex: 1;
+            display: flex; flex-direction: column;
+        }
+        h2 { margin-top: 0; font-size: 1.1rem; text-align: center; color: white; padding: 8px; border-radius: 6px; }
+        .panel-a h2 { background-color: var(--client-a); }
+        .panel-b h2 { background-color: var(--client-b); }
+        .panel-server h2 { background-color: var(--server); }
+        
+        .control-group { margin-bottom: 12px; }
+        select, button { width: 100%; padding: 8px; margin-top: 5px; border-radius: 4px; border: 1px solid #ccc; font-size: 0.95rem; }
+        button { cursor: pointer; border: none; color: white; font-weight: bold; transition: background 0.2s; }
+        button:hover { filter: brightness(1.1); }
+        button:disabled { background-color: #a0aec0 !important; cursor: not-allowed; }
+        
+        .btn-start { background-color: var(--success); }
+        .btn-action { background-color: #4a5568; margin-bottom: 5px;}
+        .btn-commit { background-color: var(--success); }
+        .btn-rollback { background-color: var(--danger); }
+        
+        .client-screen {
+            background: #edf2f7; padding: 15px; border-radius: 6px; flex: 1;
+            font-family: monospace; font-size: 1.05rem; position: relative; overflow: hidden;
+        }
+        
+        .loading-overlay {
+            position: absolute; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.85); display: none;
+            justify-content: center; align-items: center; flex-direction: column;
+            color: var(--wait); font-weight: bold; font-size: 1.1rem; z-index: 10; text-align: center;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3; border-top: 4px solid var(--wait);
+            border-radius: 50%; width: 30px; height: 30px; animation: spin 1s linear infinite; margin-bottom: 10px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Server specific */
+        .db-state { font-size: 1.05rem; background: #e2e8f0; padding: 12px; border-radius: 6px; margin-bottom: 10px; }
+        .lock-badge { display: inline-block; padding: 3px 6px; border-radius: 4px; font-weight: bold; color: white; margin-right: 5px; font-size: 0.85rem;}
+        .lock-s { background-color: var(--success); }
+        .lock-x { background-color: var(--danger); }
+        
+        #log { 
+            height: 140px; overflow-y: auto; background: #1a202c; color: #a0aec0; 
+            padding: 10px; font-family: monospace; font-size: 0.9rem; border-radius: 6px; 
+        }
+        .log-a { color: #63b3ed; } .log-b { color: #b794f4; } .log-s { color: #9ae6b4; } .log-err { color: #fc8181; }
+        .hidden { display: none !important; }
+
+        /* Sidebar - Инструкции */
+        .sidebar {
+            width: 320px; background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: flex; flex-direction: column; transition: width 0.3s ease; position: relative;
+        }
+        .sidebar.collapsed { width: 40px; cursor: pointer; }
+        .sidebar-header {
+            padding: 15px; background: #4a5568; color: white; border-radius: 8px 8px 0 0;
+            display: flex; justify-content: space-between; align-items: center; font-weight: bold;
+        }
+        .sidebar.collapsed .sidebar-header { border-radius: 8px; padding: 15px 10px; justify-content: center;}
+        .sidebar-title { white-space: nowrap; }
+        .sidebar.collapsed .sidebar-title, .sidebar.collapsed .sidebar-content { display: none; }
+        
+        .toggle-btn { 
+            background: none; border: none; color: white; cursor: pointer; font-size: 1.2rem; padding: 0;
+        }
+        .sidebar-content { padding: 15px; overflow-y: auto; flex: 1; font-size: 0.95rem; }
+        
+        details { background: #f7fafc; padding: 10px; border-radius: 6px; margin-bottom: 10px; border: 1px solid #e2e8f0; }
+        summary { font-weight: bold; cursor: pointer; outline: none; color: #2d3748; margin-bottom: 5px;}
+        details p { margin: 5px 0 0 0; font-size: 0.85rem; color: #4a5568; line-height: 1.4; }
+        details ul { margin: 5px 0 0 20px; padding: 0; font-size: 0.85rem; color: #4a5568; }
+        details li { margin-bottom: 4px; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>⚙️ Симулятор транзакций</h1>
+    <p>Визуализация уровней изоляции и блокировок в реляционных БД</p>
+</header>
+
+<div class="page-wrapper">
+    <!-- Основная рабочая зона -->
+    <div class="workspace">
+        <div class="panels-container">
+            <!-- КЛИЕНТ А -->
+            <div class="panel panel-a" id="client-a">
+                <h2>Приложение А (Менеджер)</h2>
+                <div class="control-group">
+                    <label>Уровень изоляции:</label>
+                    <select id="iso-a" onchange="changeIso('A')">
+                        <option value="READ_UNCOMMITTED">Read Uncommitted (NOLOCK)</option>
+                        <option value="READ_COMMITTED" selected>Read Committed (По умолчанию)</option>
+                        <option value="REPEATABLE_READ">Repeatable Read</option>
+                    </select>
+                </div>
+                <div class="control-group" id="ctrl-start-a">
+                    <button class="btn-start" onclick="beginTran('A')">▶ Начать транзакцию</button>
+                </div>
+                <div class="control-group hidden" id="ctrl-active-a">
+                    <button class="btn-action" onclick="reqRead('A')">👀 Прочитать баланс (S-Lock)</button>
+                    <button class="btn-action" onclick="reqUpdate('A', 500)">💰 Добавить +500 (X-Lock)</button>
+                    <div style="display: flex; gap: 10px; margin-top: 10px;">
+                        <button class="btn-commit" onclick="commitTran('A')">✔ Commit</button>
+                        <button class="btn-rollback" onclick="rollbackTran('A')">✖ Rollback</button>
+                    </div>
+                </div>
+                <div class="client-screen">
+                    <div class="loading-overlay" id="loader-a">
+                        <div class="spinner"></div> Ждем снятия блокировки...
+                    </div>
+                    <strong>Экран приложения:</strong><br><br>
+                    <div id="screen-a">Баланс неизвестен.<br>Прочитайте данные.</div>
+                </div>
+            </div>
+
+            <!-- СЕРВЕР БД -->
+            <div class="panel panel-server">
+                <h2>Сервер БД (Состояние)</h2>
+                <div class="db-state">
+                    <strong>💾 Диск (Зафиксировано):</strong><br>
+                    Счет №1 = <span id="db-committed">1000</span> руб.
+                </div>
+                <div class="db-state" style="border-left: 4px solid var(--danger);">
+                    <strong>🧠 Память (Грязные данные):</strong><br>
+                    Счет №1 = <span id="db-uncommitted">-</span>
+                </div>
+                <div class="db-state">
+                    <strong>🔒 Диспетчер блокировок:</strong><br>
+                    <div id="lock-manager" style="margin-top: 8px;">Блокировок нет</div>
+                </div>
+            </div>
+
+            <!-- КЛИЕНТ Б -->
+            <div class="panel panel-b" id="client-b">
+                <h2>Приложение Б (Касса)</h2>
+                <div class="control-group">
+                    <label>Уровень изоляции:</label>
+                    <select id="iso-b" onchange="changeIso('B')">
+                        <option value="READ_UNCOMMITTED">Read Uncommitted (NOLOCK)</option>
+                        <option value="READ_COMMITTED" selected>Read Committed (По умолчанию)</option>
+                        <option value="REPEATABLE_READ">Repeatable Read</option>
+                    </select>
+                </div>
+                <div class="control-group" id="ctrl-start-b">
+                    <button class="btn-start" onclick="beginTran('B')">▶ Начать транзакцию</button>
+                </div>
+                <div class="control-group hidden" id="ctrl-active-b">
+                    <button class="btn-action" onclick="reqRead('B')">👀 Прочитать баланс (S-Lock)</button>
+                    <button class="btn-action" onclick="reqUpdate('B', -200)">💸 Списать -200 (X-Lock)</button>
+                    <div style="display: flex; gap: 10px; margin-top: 10px;">
+                        <button class="btn-commit" onclick="commitTran('B')">✔ Commit</button>
+                        <button class="btn-rollback" onclick="rollbackTran('B')">✖ Rollback</button>
+                    </div>
+                </div>
+                <div class="client-screen">
+                    <div class="loading-overlay" id="loader-b">
+                        <div class="spinner"></div> Ждем снятия блокировки...
+                    </div>
+                    <strong>Экран приложения:</strong><br><br>
+                    <div id="screen-b">Баланс неизвестен.<br>Прочитайте данные.</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Лог консоль -->
+        <div id="log">
+            <span class="log-s">> Движок симулятора запущен. Баланс Счета №1 = 1000.</span><br>
+        </div>
+    </div>
+
+    <!-- Боковая панель (Инструкции) -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header" onclick="toggleSidebar()" style="cursor: pointer;">
+            <span class="sidebar-title">📋 Сценарии семинара</span>
+            <button class="toggle-btn" id="toggle-icon">❮</button>
+        </div>
+        <div class="sidebar-content">
+            <details>
+                <summary>1. Грязное чтение (Dirty Read)</summary>
+                <p>Демонстрация работы приложения с данными, которых "не существует".</p>
+                <ul>
+                    <li><b>А:</b> Начать транзакцию ➔ Добавить +500</li>
+                    <li><i>(На сервере появился X-Lock)</i></li>
+                    <li><b>Б:</b> Изоляция ➔ <b>Read Uncommitted</b></li>
+                    <li><b>Б:</b> Начать транзакцию ➔ Прочитать. <i>(Видит 1500)</i></li>
+                    <li><b>А:</b> Rollback <i>(Отмена действий)</i>.</li>
+                    <li><b>Итог:</b> Клиент Б прочитал данные (1500), которых в итоге нет на диске.</li>
+                </ul>
+            </details>
+            <details>
+                <summary>2. Защита от грязного чтения</summary>
+                <p>Как работает Read Committed (по умолчанию в MS SQL).</p>
+                <ul>
+                    <li><b>А:</b> Начать транзакцию ➔ Добавить +500</li>
+                    <li><b>Б:</b> Изоляция ➔ <b>Read Committed</b></li>
+                    <li><b>Б:</b> Начать транзакцию ➔ Прочитать.</li>
+                    <li><i>(Б зависает: S-Lock несовместим с чужим X-Lock)</i></li>
+                    <li><b>А:</b> Commit.</li>
+                    <li><b>Итог:</b> Клиент Б отвисает и читает консистентные 1500.</li>
+                </ul>
+            </details>
+            <details>
+                <summary>3. Неповторяющееся чтение</summary>
+                <p>Изменение данных другой транзакцией "под ногами".</p>
+                <ul>
+                    <li><i>(Баланс 1000)</i></li>
+                    <li><b>Б:</b> Изоляция ➔ <b>Read Committed</b></li>
+                    <li><b>Б:</b> Начать транзакцию ➔ Прочитать. <i>(Видит 1000)</i></li>
+                    <li><b>А:</b> Начать ➔ Добавить +500 ➔ Commit.</li>
+                    <li><b>Б:</b> <i>В той же транзакции</i> ➔ Прочитать.</li>
+                    <li><b>Итог:</b> Б видит 1500! В рамках одной транзакции Б получил разные данные.</li>
+                </ul>
+            </details>
+            <details>
+                <summary>4. Защита (Repeatable Read)</summary>
+                <p>Удержание S-блокировок для защиты строк.</p>
+                <ul>
+                    <li><i>(Баланс 1000)</i></li>
+                    <li><b>Б:</b> Изоляция ➔ <b>Repeatable Read</b></li>
+                    <li><b>Б:</b> Начать транзакцию ➔ Прочитать. <i>(На сервере повис S-Lock)</i></li>
+                    <li><b>А:</b> Начать ➔ Добавить +500.</li>
+                    <li><i>(А зависает: X-Lock бьется об S-Lock)</i></li>
+                    <li><b>Б:</b> Снова прочитать <i>(видит те же 1000)</i> ➔ Commit.</li>
+                    <li><b>Итог:</b> А отвисает и выполняет апдейт.</li>
+                </ul>
+            </details>
+            <p style="text-align: center; margin-top: 20px; color: #a0aec0; font-size: 0.8rem;">
+                Можно нажать "Rollback" у зависшей сессии для имитации отмены (Timeout).
+            </p>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- ИНТЕРФЕЙС ---
+    function toggleSidebar() {
+        const sb = document.getElementById('sidebar');
+        const icon = document.getElementById('toggle-icon');
+        sb.classList.toggle('collapsed');
+        icon.innerText = sb.classList.contains('collapsed') ? '❯' : '❮';
+    }
+
+    // --- STATE СЕРВЕРА ---
+    let db = {
+        committed: 1000,
+        uncommitted: null, 
+        locks: { S: [], X: null }
+    };
+
+    // --- STATE КЛИЕНТОВ ---
+    let clients = {
+        'A': { active: false, iso: 'READ_COMMITTED', waitingAction: null },
+        'B': { active: false, iso: 'READ_COMMITTED', waitingAction: null }
+    };
+
+    // --- ЛОГИКА СУБД ---
+    function log(msg, type) {
+        const l = document.getElementById('log');
+        l.innerHTML += `<span class="log-${type}">${msg}</span><br>`;
+        l.scrollTop = l.scrollHeight;
+    }
+
+    function updateUI() {
+        document.getElementById('db-committed').innerText = db.committed;
+        document.getElementById('db-uncommitted').innerText = db.uncommitted !== null ? db.uncommitted + ' руб.' : '-';
+        
+        let lockHtml = '';
+        if (db.locks.X) {
+            lockHtml += `<span class="lock-badge lock-x">X-Lock</span> Клиент ${db.locks.X}<br>`;
+        }
+        if (db.locks.S.length > 0) {
+            lockHtml += `<span class="lock-badge lock-s">S-Lock</span> Клиент ${db.locks.S.join(', ')}<br>`;
+        }
+        if (!db.locks.X && db.locks.S.length === 0) lockHtml = 'Свободно';
+        document.getElementById('lock-manager').innerHTML = lockHtml;
+    }
+
+    // --- УПРАВЛЕНИЕ ТРАНЗАКЦИЯМИ ---
+    function changeIso(c) {
+        clients[c].iso = document.getElementById(`iso-${c.toLowerCase()}`).value;
+        log(`> Клиент ${c}: уровень изоляции ${clients[c].iso}`, c.toLowerCase());
+    }
+
+    function beginTran(c) {
+        clients[c].active = true;
+        document.getElementById(`ctrl-start-${c.toLowerCase()}`).classList.add('hidden');
+        document.getElementById(`ctrl-active-${c.toLowerCase()}`).classList.remove('hidden');
+        document.getElementById(`screen-${c.toLowerCase()}`).innerHTML = 'Транзакция открыта.<br><br>-';
+        log(`> Клиент ${c}: BEGIN TRAN`, c.toLowerCase());
+        document.getElementById(`iso-${c.toLowerCase()}`).disabled = true;
+    }
+
+    function endTran(c, isCommit) {
+        // Если клиент нажал Commit/Rollback во время зависания (отмена ожидания)
+        if (clients[c].waitingAction) {
+            clients[c].waitingAction = null;
+            document.getElementById(`loader-${c.toLowerCase()}`).style.display = 'none';
+            log(`> Клиент ${c}: Принудительная отмена ожидания (Query Canceled)`, 'err');
+        }
+
+        clients[c].active = false;
+        document.getElementById(`ctrl-start-${c.toLowerCase()}`).classList.remove('hidden');
+        document.getElementById(`ctrl-active-${c.toLowerCase()}`).classList.add('hidden');
+        document.getElementById(`iso-${c.toLowerCase()}`).disabled = false;
+        
+        if (isCommit && db.locks.X === c) {
+            db.committed = db.uncommitted;
+        }
+        if (db.locks.X === c) db.uncommitted = null;
+        
+        releaseLocks(c);
+        
+        const action = isCommit ? 'COMMIT' : 'ROLLBACK';
+        log(`> Клиент ${c}: ${action}`, c.toLowerCase());
+        document.getElementById(`screen-${c.toLowerCase()}`).innerHTML = `Транзакция закрыта (${action}).<br><br>-`;
+        
+        updateUI();
+        processQueue(); // Пробуждаем ждущих
+    }
+
+    function commitTran(c) { endTran(c, true); }
+    function rollbackTran(c) { endTran(c, false); }
+
+    // --- ДВИЖОК БЛОКИРОВОК ---
+    function reqRead(c) {
+        let iso = clients[c].iso;
+        
+        if (iso !== 'READ_UNCOMMITTED') {
+            if (db.locks.X && db.locks.X !== c) {
+                wait(c, () => reqRead(c));
+                return;
+            }
+            if (!db.locks.S.includes(c)) db.locks.S.push(c);
+        }
+
+        let val = (iso === 'READ_UNCOMMITTED' && db.uncommitted !== null) ? db.uncommitted : db.committed;
+        let dirtyFlag = (iso === 'READ_UNCOMMITTED' && db.uncommitted !== null) ? '<br><span style="color:#e53e3e">(Грязное чтение)</span>' : '';
+        
+        document.getElementById(`screen-${c.toLowerCase()}`).innerHTML = `Баланс: <b>${val}</b> руб. ${dirtyFlag}`;
+        log(`> Клиент ${c}: SELECT -> ${val}`, c.toLowerCase());
+
+        if (iso === 'READ_COMMITTED') {
+            db.locks.S = db.locks.S.filter(owner => owner !== c);
+            log(`> Клиент ${c}: S-Lock поставлен и сразу снят`, 's');
+        } else if (iso === 'REPEATABLE_READ') {
+            log(`> Клиент ${c}: S-Lock УДЕРЖИВАЕТСЯ`, 's');
+        }
+        
+        updateUI();
+    }
+
+    function reqUpdate(c, amount) {
+        const hasOtherS = db.locks.S.length > 0 && !(db.locks.S.length === 1 && db.locks.S[0] === c);
+        
+        if ((db.locks.X && db.locks.X !== c) || hasOtherS) {
+            wait(c, () => reqUpdate(c, amount));
+            return;
+        }
+
+        db.locks.X = c;
+        db.locks.S = db.locks.S.filter(owner => owner !== c); 
+        
+        if (db.uncommitted === null) db.uncommitted = db.committed;
+        db.uncommitted += amount;
+
+        document.getElementById(`screen-${c.toLowerCase()}`).innerHTML = `Новый баланс: <b>${db.uncommitted}</b> руб.<br><small>(Не зафиксировано)</small>`;
+        log(`> Клиент ${c}: UPDATE на ${amount} (Взят X-Lock)`, c.toLowerCase());
+        
+        updateUI();
+    }
+
+    // --- ОЧЕРЕДЬ ОЖИДАНИЯ ---
+    function wait(c, actionFunc) {
+        document.getElementById(`loader-${c.toLowerCase()}`).style.display = 'flex';
+        clients[c].waitingAction = actionFunc;
+        log(`> Клиент ${c}: ЗАВИС! Конфликт блокировок.`, 'err');
+    }
+
+    function releaseLocks(c) {
+        if (db.locks.X === c) db.locks.X = null;
+        db.locks.S = db.locks.S.filter(owner => owner !== c);
+    }
+
+    function processQueue() {
+        ['A', 'B'].forEach(c => {
+            if (clients[c].waitingAction) {
+                document.getElementById(`loader-${c.toLowerCase()}`).style.display = 'none';
+                let action = clients[c].waitingAction;
+                clients[c].waitingAction = null;
+                log(`> Клиент ${c}: Отвис! Повтор запроса...`, 's');
+                action(); 
+            }
+        });
+    }
+
+    updateUI();
+</script>
+</body>
+</html>
